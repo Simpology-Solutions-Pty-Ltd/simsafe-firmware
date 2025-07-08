@@ -1,0 +1,17 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/usr/local/include/pqxx/**"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/g++-13",
+            "cStandard": "c11",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
+    ],
+    "version": 4
+}

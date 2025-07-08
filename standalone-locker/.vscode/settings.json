@@ -1,0 +1,10 @@
+{
+  "C_Cpp.default.compilerPath": "/usr/bin/g++",
+  "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+  "files.associations": {
+    "connection": "cpp",
+    "ostream": "cpp",
+    "optional": "cpp",
+    "pqxx": "cpp"
+  },
+}
