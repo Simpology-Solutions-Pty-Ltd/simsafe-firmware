@@ -10,10 +10,16 @@ using namespace std;
 using namespace pqxx;
 
 unique_ptr<connection> conn;
+pthread_t work_thread;
 
-void LoadEnv() {
+void LoadEnv() noexcept(true) {
   cout << "Loading environment..." << endl;
-  dotenv::init();
+  try {
+    dotenv::init();
+  } catch (exception const &e) {
+    cout << "Error opening env file: " << e.what() << endl;
+    exit(1);
+  }
   if (getenv("DATABASE_NAME") == NULL) {
     cout << "DATABASE_NAME env variable required" << endl;
     exit(1);
@@ -33,15 +39,21 @@ void LoadEnv() {
   cout << "Environment loaded!" << endl;
 }
 
-unique_ptr<connection> ConnectDatabase() {
+unique_ptr<connection> ConnectDatabase() noexcept(true) {
   string connection_string = "host=";
-  connection_string.append(getenv("DATABASE_HOST"));
-  connection_string.append(" dbname=");
-  connection_string.append(getenv("DATABASE_NAME"));
-  connection_string.append(" user=");
-  connection_string.append(getenv("DATABASE_USERNAME"));
-  connection_string.append(" password=");
-  connection_string.append(getenv("DATABASE_PASSWORD"));
+  try {
+    connection_string.append(getenv("DATABASE_HOST"));
+    connection_string.append(" dbname=");
+    connection_string.append(getenv("DATABASE_NAME"));
+    connection_string.append(" user=");
+    connection_string.append(getenv("DATABASE_USERNAME"));
+    connection_string.append(" password=");
+    connection_string.append(getenv("DATABASE_PASSWORD"));
+  } catch (exception const &e) {
+    cout << "Error loading environment variables: " << e.what() << "Connecting using default values" << endl;
+    connection_string.clear();
+    connection_string = "host=localhost dbname=simsafe user=postgres password=postgres";
+  }
 
   cout << "Connecting to database..." << endl;
 
@@ -61,14 +73,34 @@ unique_ptr<connection> ConnectDatabase() {
   return c;
 }
 
+void *ExampleWorkerThreadTask(void *arg) {
+  pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
+  while (true) {
+    auto start = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
+    while (chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count() - start < 1000);
+    pthread_testcancel();
+    cout << "Worker thread tick" << endl;
+  }
+  return NULL;
+}
+
 void HandleSignal(int signum) {
-  cout << "\nKill signal received. Exiting program..." << std::endl;
-  // Add any cleanup here
-  if (conn) conn->close();
+  try {
+    cout << "\nKill signal received. Closing threads and exiting program..." << std::endl;
+    // Add any cleanup here
+    cout << "Closing worker thread..." << endl;
+    pthread_cancel(work_thread);
+    pthread_join(work_thread, NULL);
+    cout << "Worker thread closed!" << endl;
+    if (conn) conn->close();
+  } catch (exception const &e) {
+    cout << "Error during shutdown: " << e.what() << "Exiting anyways..." << endl;
+    exit(1);
+  }
   exit(0);
 }
 
-bool IsHealthy() {
+bool IsHealthy() noexcept(true) {
   if (!conn || !conn->is_open()) {
     return false;
   }
@@ -80,11 +112,7 @@ bool IsHealthy() {
     if (result.size() > 0) {
       return true;
     }
-  } catch (const pqxx::broken_connection& e) {
-    return false;
-  } catch (const pqxx::sql_error& e) {
-    return false;
-  } catch (const std::exception& e) {
+  } catch (exception const &e) {
     return false;
   }
   
@@ -104,11 +132,17 @@ int main() {
  
   cout << "Initialization complete\nProgram will now run for the rest of eternity, unless stopped o7" << endl;
 
+  pthread_create(&work_thread, NULL, ExampleWorkerThreadTask, NULL);
+
   while (true) {
     this_thread::sleep_for(chrono::seconds(1));
     if (!IsHealthy()) {
       cout << "Database connection lost. Reconnecting..." << std::endl;
-      conn->close();
+      try {
+        conn->close();
+      } catch (exception const &e) {
+        cout << "Error when closing database connection: " << e.what() << "This does not interrupt reconnection attempt" << endl;
+      }
       goto connect_db;
     }
   }

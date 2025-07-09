@@ -1,6 +1,6 @@
 CXX = g++
 
-CXXFLAGS = -std=c++20 -Wall -Werror
+CXXFLAGS = -std=c++20 -Wall -Werror -O0
 
 LIBS = -lpqxx -lpq lib/libcserialport.a -Llib -lpigpio -lrt
 
