@@ -1,0 +1,12 @@
+{
+  "files.associations": {
+    "pqxx": "cpp",
+    "ostream": "cpp",
+    "optional": "cpp",
+    "variant": "cpp",
+    "string": "cpp",
+    "chrono": "cpp",
+    "iostream": "cpp"
+  },
+  "C_Cpp.default.compilerPath": ""
+}

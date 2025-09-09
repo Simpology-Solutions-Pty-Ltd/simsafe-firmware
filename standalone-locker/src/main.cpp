@@ -5,12 +5,13 @@
 #include <thread>
 #include <chrono>
 #include "../include/dotenv/dotenv.h"
+#include "database.cpp"
 
 using namespace std;
 using namespace pqxx;
 
 unique_ptr<connection> conn;
-pthread_t work_thread;
+vector<pthread_t> work_threads;
 
 void LoadEnv() noexcept(true) {
   cout << "Loading environment..." << endl;
@@ -39,47 +40,13 @@ void LoadEnv() noexcept(true) {
   cout << "Environment loaded!" << endl;
 }
 
-unique_ptr<connection> ConnectDatabase() noexcept(true) {
-  string connection_string = "host=";
-  try {
-    connection_string.append(getenv("DATABASE_HOST"));
-    connection_string.append(" dbname=");
-    connection_string.append(getenv("DATABASE_NAME"));
-    connection_string.append(" user=");
-    connection_string.append(getenv("DATABASE_USERNAME"));
-    connection_string.append(" password=");
-    connection_string.append(getenv("DATABASE_PASSWORD"));
-  } catch (exception const &e) {
-    cout << "Error loading environment variables: " << e.what() << "Connecting using default values" << endl;
-    connection_string.clear();
-    connection_string = "host=localhost dbname=simsafe user=postgres password=postgres";
-  }
-
-  cout << "Connecting to database..." << endl;
-
-  unique_ptr<connection> c;
-
-  while (c == NULL) {
-    try {
-      c = make_unique<connection>(connection_string);
-    } catch (exception const &e) {
-      cout << "Failed to connect to database: " << e.what() << "Retrying in 5 seconds..." << endl;
-      this_thread::sleep_for(chrono::seconds(5));
-    }
-  }
-
-  cout << "Database connection successful!" << endl;
-
-  return c;
-}
-
 void *ExampleWorkerThreadTask(void *arg) {
   pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
   while (true) {
     auto start = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
     while (chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count() - start < 1000);
     pthread_testcancel();
-    cout << "Worker thread tick" << endl;
+    cout << "Worker thread " << *(int*)arg << " tick " << start << endl;
   }
   return NULL;
 }
@@ -88,10 +55,16 @@ void HandleSignal(int signum) {
   try {
     cout << "\nKill signal received. Closing threads and exiting program..." << std::endl;
     // Add any cleanup here
-    cout << "Closing worker thread..." << endl;
-    pthread_cancel(work_thread);
-    pthread_join(work_thread, NULL);
-    cout << "Worker thread closed!" << endl;
+    cout << "Closing worker threads..." << endl;
+    
+    for (auto thread : work_threads) {
+      pthread_cancel(thread);
+    }
+    for (auto thread : work_threads) {
+      pthread_join(thread, NULL);
+    }
+    
+    cout << "Worker threads closed!" << endl;
     if (conn) conn->close();
   } catch (exception const &e) {
     cout << "Error during shutdown: " << e.what() << "Exiting anyways..." << endl;
@@ -123,7 +96,9 @@ int main() {
   signal(SIGINT, HandleSignal);
   signal(SIGTERM, HandleSignal);
 
-  cout << "Firmware initializing" << endl;
+  auto cores_available = sysconf(_SC_NPROCESSORS_ONLN);
+
+  cout << "Firmware initializing\nCores available: " << cores_available  << endl;
 
   LoadEnv();
 
@@ -132,7 +107,12 @@ int main() {
  
   cout << "Initialization complete\nProgram will now run for the rest of eternity, unless stopped o7" << endl;
 
-  pthread_create(&work_thread, NULL, ExampleWorkerThreadTask, NULL);
+  for (int i = 0; i < cores_available; i++) {
+    pthread_t temp;
+    int num = i;
+    pthread_create(&temp, NULL, ExampleWorkerThreadTask, &num);
+    work_threads.push_back(temp);
+  }
 
   while (true) {
     this_thread::sleep_for(chrono::seconds(1));

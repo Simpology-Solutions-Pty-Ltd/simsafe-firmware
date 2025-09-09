@@ -2,7 +2,7 @@ CXX = g++
 
 CXXFLAGS = -std=c++20 -Wall -Werror -O0
 
-LIBS = -lpqxx -lpq lib/libcserialport.a -Llib -lpigpio -lrt
+LIBS = -lpqxx -lpq -lgpiod -lrt
 
 SOURCES = src/main.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
