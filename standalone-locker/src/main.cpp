@@ -7,10 +7,6 @@
 #include "../include/dotenv/dotenv.h"
 #include "database.cpp"
 
-using namespace std;
-using namespace pqxx;
-
-unique_ptr<connection> conn;
 vector<pthread_t> work_threads;
 
 void LoadEnv() noexcept(true) {
@@ -37,6 +33,10 @@ void LoadEnv() noexcept(true) {
     cout << "DATABASE_HOST env variable required" << endl;
     exit(1);
   }
+  if (getenv("CONTROLLER_SERIAL_NUMBER") == NULL) {
+    cout << "CONTROLLER_SERIAL_NUMBER env variable required" << endl;
+    exit(1);
+  }
   cout << "Environment loaded!" << endl;
 }
 
@@ -46,8 +46,49 @@ void *ExampleWorkerThreadTask(void *arg) {
     auto start = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
     while (chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count() - start < 1000);
     pthread_testcancel();
-    cout << "Worker thread " << *(int*)arg << " tick " << start << endl;
+    cout << "Worker thread tick " << start << endl;
   }
+  return NULL;
+}
+
+void *PositionOpenedClosedEventsThreadTask(void *arg) {
+  pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
+  
+  auto current_states = make_unique<vector<bool>>(num_hardware_positions);
+  auto next_states = make_unique<vector<bool>>(num_hardware_positions);
+
+  FetchPositionStates(current_states.get());
+
+  for (auto state : *current_states.get()) {
+    cout << "Starting state: " << state << endl;
+  }
+
+  db_connection *conn;
+  
+  while (true) {
+    this_thread::sleep_for(chrono::milliseconds(1000));
+    pthread_testcancel();
+    
+    conn = FetchConnection();
+    
+    FetchPositionStates(next_states.get());
+    for (int i = 0; i < num_hardware_positions; i++) {
+      if (next_states->at(i) && !current_states->at(i)) {
+        CreatePositionOpenedEvent(&conn->conn, i + 1);
+      } else if (!next_states->at(i) && current_states->at(i)) {
+        CreatePositionClosedEvent(&conn->conn, i + 1);
+      }
+    }
+
+    current_states.swap(next_states);
+
+    for (auto state : *current_states.get()) {
+      cout << "Next state: " << state << endl;
+    }
+
+    conn->in_use = false;
+  }
+
   return NULL;
 }
 
@@ -60,12 +101,13 @@ void HandleSignal(int signum) {
     for (auto thread : work_threads) {
       pthread_cancel(thread);
     }
+
     for (auto thread : work_threads) {
       pthread_join(thread, NULL);
     }
     
     cout << "Worker threads closed!" << endl;
-    if (conn) conn->close();
+    CloseConnectionPool();
   } catch (exception const &e) {
     cout << "Error during shutdown: " << e.what() << "Exiting anyways..." << endl;
     exit(1);
@@ -73,13 +115,13 @@ void HandleSignal(int signum) {
   exit(0);
 }
 
-bool IsHealthy() noexcept(true) {
+bool IsHealthy(connection *conn) noexcept(true) {
   if (!conn || !conn->is_open()) {
     return false;
   }
   
   try {
-    nontransaction ntxn(*conn.get(), "health_check");
+    nontransaction ntxn(*conn, "health_check");
     result result = ntxn.exec("SELECT version()");
     
     if (result.size() > 0) {
@@ -103,26 +145,40 @@ int main() {
   LoadEnv();
 
   connect_db:
-  conn = ConnectDatabase();
+  InitializeConnectionPools();
+
+  auto conn = FetchConnection();
+  
+  if (!DoesCabinetExist(&conn->conn)) {
+    cout << "Cabinet does not exist in database" << endl;
+    // TODO: Need to decide what to do, make new cabinet? Exit?
+  }
+
+  ReadCabinetIdIntoGlobal(&conn->conn);
+  ReadDipSwitchIntoGlobal();
+
+  cout << "Cabinetid: " << cabinetid << endl << "Num positions hardware: " << num_hardware_positions << endl;
+
+  if (!DoesCabinetPositionMatchHardwarePositionCount(&conn->conn)) {
+    cout << "Cabinet does not contain the same amount of positions as dip switches are reporting" << endl;
+    // TODO: Decide what do to
+    CloseConnectionPool();
+    exit(1);
+  }
  
   cout << "Initialization complete\nProgram will now run for the rest of eternity, unless stopped o7" << endl;
 
-  for (int i = 0; i < cores_available; i++) {
-    pthread_t temp;
-    int num = i;
-    pthread_create(&temp, NULL, ExampleWorkerThreadTask, &num);
-    work_threads.push_back(temp);
-  }
+  pthread_t temp;
+  pthread_create(&temp, NULL, ExampleWorkerThreadTask, NULL);
+  work_threads.push_back(temp);
+  pthread_create(&temp, NULL, PositionOpenedClosedEventsThreadTask, NULL);
+  work_threads.push_back(temp);
 
   while (true) {
     this_thread::sleep_for(chrono::seconds(1));
-    if (!IsHealthy()) {
+    if (!IsHealthy(&conn->conn)) {
       cout << "Database connection lost. Reconnecting..." << std::endl;
-      try {
-        conn->close();
-      } catch (exception const &e) {
-        cout << "Error when closing database connection: " << e.what() << "This does not interrupt reconnection attempt" << endl;
-      }
+      CloseConnectionPool();
       goto connect_db;
     }
   }
