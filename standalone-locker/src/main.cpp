@@ -40,17 +40,6 @@ void LoadEnv() noexcept(true) {
   cout << "Environment loaded!" << endl;
 }
 
-void *ExampleWorkerThreadTask(void *arg) {
-  pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
-  while (true) {
-    auto start = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
-    while (chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count() - start < 1000);
-    pthread_testcancel();
-    cout << "Worker thread tick " << start << endl;
-  }
-  return NULL;
-}
-
 void *PositionOpenedClosedEventsThreadTask(void *arg) {
   pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
   
@@ -92,9 +81,84 @@ void *PositionOpenedClosedEventsThreadTask(void *arg) {
   return NULL;
 }
 
+void AuthCodeRead(const char *auth_code, int length) {
+  cout << "Auth code read: ";
+  for (int i = 0; i < length; i++) {
+    cout << auth_code[i];
+  }
+  cout << endl;
+
+  auto conn = FetchConnection();
+  vector<bool> output(num_hardware_positions);
+
+  AuthCardScanned(&conn->conn, auth_code, length, &output);
+
+  conn->in_use = false;
+
+  cout << "Access received: ";
+  for (int i = 0; i < num_hardware_positions; i++) {
+    if (output.at(i)) 
+      cout << '1';
+    else
+      cout << '0';
+  }
+  cout << endl;
+}
+
+void *ReadSerialThreadTask(void *arg) {
+  pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
+  
+  int fd = *(int*)arg;
+
+  char last_read_content[512] = {0};
+  char buffer[512] = {0};
+  int bytes_read, cursor_pos = 0;
+  
+  while (true) {
+    if ((bytes_read = ReadFromSerialPort(fd, buffer, 512)) > 0) {
+      memcpy(&last_read_content[cursor_pos], buffer, bytes_read);
+      cursor_pos += bytes_read;
+      
+      if (cursor_pos < 512) {
+        if (last_read_content[cursor_pos - 1] == '\n') {
+          // Terminating char has been sent, fire 'event'
+          AuthCodeRead(last_read_content, cursor_pos);
+          cursor_pos = 0;
+        }
+      } else {
+        if (last_read_content[511] == '\n') {
+          AuthCodeRead(last_read_content, 512);
+        } else {
+          AuthCodeRead(last_read_content, 511);
+        }
+        cursor_pos = 0;
+      }
+    }
+    // cout << "Read" << endl;
+    pthread_testcancel();
+    this_thread::sleep_for(chrono::milliseconds(10));
+  }
+
+  return NULL;
+}
+
+void *TempWriteSerialReaderThreadTask(void *arg) {
+  pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
+  
+  int fd = *(int*)arg;
+
+  while (true) {
+    WriteToSerialPort(fd, "12345", 4);
+    pthread_testcancel();
+    this_thread::sleep_for(chrono::milliseconds(5000));
+  }
+
+  return NULL;
+}
+
 void HandleSignal(int signum) {
   try {
-    cout << "\nKill signal received. Closing threads and exiting program..." << std::endl;
+    cout << "\nKill signal received. Closing threads and exiting program..." << endl;
     // Add any cleanup here
     cout << "Closing worker threads..." << endl;
     
@@ -168,16 +232,22 @@ int main() {
  
   cout << "Initialization complete\nProgram will now run for the rest of eternity, unless stopped o7" << endl;
 
+  int fd = OpenSerialPort("/dev/ttyACM0");
+  ConfigureSerialPort(fd, 9600);
+
   pthread_t temp;
-  pthread_create(&temp, NULL, ExampleWorkerThreadTask, NULL);
+  // pthread_create(&temp, NULL, PositionOpenedClosedEventsThreadTask, NULL);
+  // work_threads.push_back(temp);
+  pthread_create(&temp, NULL, ReadSerialThreadTask, &fd);
   work_threads.push_back(temp);
-  pthread_create(&temp, NULL, PositionOpenedClosedEventsThreadTask, NULL);
-  work_threads.push_back(temp);
+  // this_thread::sleep_for(chrono::milliseconds(1000));
+  // pthread_create(&temp, NULL, TempWriteSerialReaderThreadTask, &fd);
+  // work_threads.push_back(temp);
 
   while (true) {
     this_thread::sleep_for(chrono::seconds(1));
     if (!IsHealthy(&conn->conn)) {
-      cout << "Database connection lost. Reconnecting..." << std::endl;
+      cout << "Database connection lost. Reconnecting..." << endl;
       CloseConnectionPool();
       goto connect_db;
     }

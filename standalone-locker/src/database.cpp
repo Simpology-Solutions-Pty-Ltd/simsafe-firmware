@@ -34,6 +34,7 @@ void InitializeConnectionPools(void) noexcept(true) {
   cout << "Connecting to database..." << endl;
 
   bool connected = false;
+  _connections.get()->clear();
 
   for (long unsigned int i = 0; i < DB_CONNECTION_COUNT; i++) {
     connected = false;
@@ -74,7 +75,6 @@ db_connection* FetchConnection(void) {
 }
 
 bool DoesCabinetExist(connection *conn) noexcept(true) {
-  cout << conn << endl;
   if (conn == NULL) {
     return false;
   }
@@ -135,4 +135,31 @@ void CreatePositionClosedEvent(connection *conn, u_int16_t index) noexcept(false
   work tx{*conn};
   tx.exec("call \"eventInsertPositionClosed\"(" + tx.quote(getenv("CONTROLLER_SERIAL_NUMBER")) + "," + to_string(index) + ")");
   tx.commit();
+}
+
+vector<bool> *AuthCardScanned(connection *conn, const char *auth_code, int length, vector<bool> *output) noexcept(true) {
+  if (conn == NULL || output == NULL || length < 1) {
+    return output;
+  }
+
+  char buffer[513] = {0};
+
+  memcpy(buffer, auth_code, length);
+
+  try {
+    work tx{*conn};
+    string access_string = tx.query_value<string>("select \"cardScanned\"(" + tx.quote(getenv("CONTROLLER_SERIAL_NUMBER")) + "," + tx.quote(buffer) + ")");
+    tx.commit();
+  
+    if (access_string.empty()) {
+      return output;
+    }
+  
+    for (size_t i = 0; i < access_string.length(); i++) {
+      output->at(0) = access_string[i] == '1';
+    }
+  } catch (exception const &e) {}
+
+
+  return output;
 }
