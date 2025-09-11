@@ -122,14 +122,14 @@ void *ReadSerialThreadTask(void *arg) {
       if (cursor_pos < 512) {
         if (last_read_content[cursor_pos - 1] == '\n') {
           // Terminating char has been sent, fire 'event'
-          AuthCodeRead(last_read_content, cursor_pos);
+          AuthCodeRead(last_read_content, cursor_pos - 1);
           cursor_pos = 0;
         }
       } else {
         if (last_read_content[511] == '\n') {
-          AuthCodeRead(last_read_content, 512);
-        } else {
           AuthCodeRead(last_read_content, 511);
+        } else {
+          AuthCodeRead(last_read_content, 512);
         }
         cursor_pos = 0;
       }

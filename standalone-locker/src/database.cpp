@@ -156,7 +156,7 @@ vector<bool> *AuthCardScanned(connection *conn, const char *auth_code, int lengt
     }
   
     for (size_t i = 0; i < access_string.length(); i++) {
-      output->at(0) = access_string[i] == '1';
+      output->at(i) = access_string[i] == '1';
     }
   } catch (exception const &e) {}
 
