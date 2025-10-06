@@ -103,6 +103,11 @@ void AuthCodeRead(const char *auth_code, int length) {
       cout << '0';
   }
   cout << endl;
+
+  SendWordToGPIO(&output);
+  OpenGPIOOutput();
+  this_thread::sleep_for(chrono::milliseconds(200));
+  CloseGPIOOutput();
 }
 
 void *ReadSerialThreadTask(void *arg) {
@@ -172,6 +177,10 @@ void HandleSignal(int signum) {
     
     cout << "Worker threads closed!" << endl;
     CloseConnectionPool();
+    cout << "Closing GPIO..." << endl;
+    ResetGPIO();
+    CloseGPIO();
+    cout << "GPIO closed!" << endl;
   } catch (exception const &e) {
     cout << "Error during shutdown: " << e.what() << "Exiting anyways..." << endl;
     exit(1);
@@ -219,6 +228,32 @@ int main() {
   }
 
   ReadCabinetIdIntoGlobal(&conn->conn);
+
+  if (OpenGPIOChip("/dev/gpiochip4")) {
+    cout << "Could not open GPIO chip" << endl;
+    // TODO: Decide what do to
+    CloseConnectionPool();
+    exit(1);
+  }
+
+  if (GetGPIOLines()) {
+    cout << "Could not get GPIO lines" << endl;
+    // TODO: Decide what do to
+    CloseGPIOChipOnly();
+    CloseConnectionPool();
+    exit(1);
+  }
+
+  if (ConfigureGPIOChip()) {
+    cout << "Could not configure GPIO lines" << endl;
+    // TODO: Decide what do to
+    CloseGPIO();
+    CloseConnectionPool();
+    exit(1);
+  }
+
+  ResetGPIO();
+
   ReadDipSwitchIntoGlobal();
 
   cout << "Cabinetid: " << cabinetid << endl << "Num positions hardware: " << num_hardware_positions << endl;
@@ -226,6 +261,7 @@ int main() {
   if (!DoesCabinetPositionMatchHardwarePositionCount(&conn->conn)) {
     cout << "Cabinet does not contain the same amount of positions as dip switches are reporting" << endl;
     // TODO: Decide what do to
+    CloseGPIO();
     CloseConnectionPool();
     exit(1);
   }
@@ -236,13 +272,8 @@ int main() {
   ConfigureSerialPort(fd, 9600);
 
   pthread_t temp;
-  // pthread_create(&temp, NULL, PositionOpenedClosedEventsThreadTask, NULL);
-  // work_threads.push_back(temp);
   pthread_create(&temp, NULL, ReadSerialThreadTask, &fd);
   work_threads.push_back(temp);
-  // this_thread::sleep_for(chrono::milliseconds(1000));
-  // pthread_create(&temp, NULL, TempWriteSerialReaderThreadTask, &fd);
-  // work_threads.push_back(temp);
 
   while (true) {
     this_thread::sleep_for(chrono::seconds(1));
