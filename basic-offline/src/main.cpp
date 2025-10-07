@@ -8,6 +8,10 @@
 #include "database.cpp"
 
 vector<pthread_t> work_threads;
+atomic<bool> lock_timeout_thread_active{false};
+pthread_t lock_timeout_thread;
+int fd;
+#define LOCK_OPEN_TIMEOUT 5000
 
 void LoadEnv() noexcept(true) {
   cout << "Loading environment..." << endl;
@@ -44,44 +48,11 @@ void LoadEnv() noexcept(true) {
   cout << "Environment loaded!" << endl;
 }
 
-void *PositionOpenedClosedEventsThreadTask(void *arg) {
+void *AwaitAndCloseLocksThreadTask(void *arg) {
   pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
-  
-  auto current_states = make_unique<vector<bool>>(num_hardware_positions);
-  auto next_states = make_unique<vector<bool>>(num_hardware_positions);
-
-  FetchPositionStates(current_states.get());
-
-  for (auto state : *current_states.get()) {
-    cout << "Starting state: " << state << endl;
-  }
-
-  db_connection *conn;
-  
-  while (true) {
-    this_thread::sleep_for(chrono::milliseconds(1000));
-    pthread_testcancel();
-    
-    conn = FetchConnection();
-    
-    FetchPositionStates(next_states.get());
-    for (HARDWARE_POSITIONS_TYPE i = 0; i < num_hardware_positions; i++) {
-      if (next_states->at(i) && !current_states->at(i)) {
-        CreatePositionOpenedEvent(&conn->conn, i + 1);
-      } else if (!next_states->at(i) && current_states->at(i)) {
-        CreatePositionClosedEvent(&conn->conn, i + 1);
-      }
-    }
-
-    current_states.swap(next_states);
-
-    for (auto state : *current_states.get()) {
-      cout << "Next state: " << state << endl;
-    }
-
-    conn->in_use = false;
-  }
-
+  this_thread::sleep_for(chrono::milliseconds(LOCK_OPEN_TIMEOUT));
+  CloseGPIOOutput();
+  lock_timeout_thread_active = false;
   return NULL;
 }
 
@@ -92,6 +63,11 @@ void AuthCodeRead(const char *auth_code, int length) {
   }
   cout << endl;
 
+  if (lock_timeout_thread_active) {
+    cout << "Locks already opened, discarding input";
+    return;
+  }
+
   auto conn = FetchConnection();
   vector<bool> output(num_hardware_positions);
 
@@ -101,18 +77,20 @@ void AuthCodeRead(const char *auth_code, int length) {
 
   cout << "Access received: ";
   for (HARDWARE_POSITIONS_TYPE i = 0; i < num_hardware_positions; i++) {
-    if (output.at(i)) 
+    if (output.at(i))
       cout << '1';
     else
       cout << '0';
   }
   cout << endl;
 
+  lock_timeout_thread_active = true;
   SendWordToGPIO(&output);
   OpenGPIOOutput();
-  this_thread::sleep_for(chrono::milliseconds(200));
-  CloseGPIOOutput();
-
+  if (pthread_create(&lock_timeout_thread, nullptr, AwaitAndCloseLocksThreadTask, nullptr) != 0) {
+    CloseGPIOOutput();
+    lock_timeout_thread_active = false; 
+  }
 }
 
 void *ReadSerialThreadTask(void *arg) {
@@ -152,15 +130,36 @@ void *ReadSerialThreadTask(void *arg) {
   return NULL;
 }
 
-void *TempWriteSerialReaderThreadTask(void *arg) {
+void *ReadGPIOThreadTask(void *arg) {
   pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
-  
-  int fd = *(int*)arg;
 
+  vector<bool> data(num_hardware_positions), prev_data(num_hardware_positions);
+  bool has_changed;
+  
   while (true) {
-    WriteToSerialPort(fd, "12345", 4);
+    has_changed = false;
+    ReadGPIO(&data);
+    for (HARDWARE_POSITIONS_TYPE i = 0; i < num_hardware_positions; i++) {
+      if (data.at(i) != prev_data.at(i)) {
+        has_changed = true;
+        break;
+      }
+    }
+
+    if (has_changed) {
+      for (int i = 0; i < num_hardware_positions; i++) {
+        if (data.at(i)) 
+          cout << '1';
+        else
+          cout << '0';
+      }
+      cout << endl;
+    }
+
+    prev_data.swap(data);
+
     pthread_testcancel();
-    this_thread::sleep_for(chrono::milliseconds(5000));
+    this_thread::sleep_for(chrono::milliseconds(10));
   }
 
   return NULL;
@@ -182,6 +181,7 @@ void HandleSignal(int signum) {
     
     cout << "Worker threads closed!" << endl;
     CloseConnectionPool();
+    CloseSerialPort(fd);
     cout << "Closing GPIO..." << endl;
     ResetGPIO();
     CloseGPIO();
@@ -243,16 +243,33 @@ int main() {
     exit(1);
   }
 
-  if (GetGPIOLines()) {
-    cout << "Could not get GPIO lines" << endl;
+  if (GetGPIOOutputLines()) {
+    cout << "Could not get GPIO output lines" << endl;
     // TODO: Decide what do to
     CloseGPIOChipOnly();
     CloseConnectionPool();
     exit(1);
   }
 
-  if (ConfigureGPIOChip()) {
-    cout << "Could not configure GPIO lines" << endl;
+  if (GetGPIOInputLines()) {
+    cout << "Could not get GPIO input lines" << endl;
+    // TODO: Decide what do to
+    CloseGPIOChipOnly();
+    CloseGPIOOutputLines();
+    CloseConnectionPool();
+    exit(1);
+  }
+
+  if (ConfigureGPIOChipOutput()) {
+    cout << "Could not configure GPIO output lines" << endl;
+    // TODO: Decide what do to
+    CloseGPIO();
+    CloseConnectionPool();
+    exit(1);
+  }
+
+  if (ConfigureGPIOChipInput()) {
+    cout << "Could not configure GPIO input lines" << endl;
     // TODO: Decide what do to
     CloseGPIO();
     CloseConnectionPool();
@@ -267,21 +284,23 @@ int main() {
 
   cout << "Cabinetid: " << cabinetid << endl << "Num positions hardware: " << num_hardware_positions << endl;
 
-  if (!DoesCabinetPositionMatchHardwarePositionCount(&conn->conn)) {
-    cout << "Cabinet does not contain the same amount of positions as dip switches are reporting" << endl;
-    // TODO: Decide what do to
-    CloseGPIO();
-    CloseConnectionPool();
-    exit(1);
-  }
+  // if (!DoesCabinetPositionMatchHardwarePositionCount(&conn->conn)) {
+  //   cout << "Cabinet does not contain the same amount of positions as dip switches are reporting" << endl;
+  //   // TODO: Decide what do to
+  //   CloseGPIO();
+  //   CloseConnectionPool();
+  //   exit(1);
+  // }
  
   cout << "Initialization complete\nProgram will now run for the rest of eternity, unless stopped o7" << endl;
 
-  int fd = OpenSerialPort("/dev/ttyACM0");
+  fd = OpenSerialPort("/dev/ttyACM0");
   ConfigureSerialPort(fd, 9600);
 
   pthread_t temp;
   pthread_create(&temp, NULL, ReadSerialThreadTask, &fd);
+  work_threads.push_back(temp);
+  pthread_create(&temp, NULL, ReadGPIOThreadTask, NULL);
   work_threads.push_back(temp);
 
   while (true) {

@@ -13,19 +13,29 @@ using namespace std;
 HARDWARE_POSITIONS_TYPE num_hardware_positions = 0;
 struct gpiod_chip *gpio_chip;
 struct gpiod_line_request_config gpio_config;
-struct gpiod_line_bulk gpio_lines;
-unsigned int gpio_offsets[] = { 17, 27, 22, 23, 24 };
-int gpio_values[] = { 1, 1, 0, 0, 0 };
+struct gpiod_line_bulk gpio_lines_output;
+struct gpiod_line_bulk gpio_lines_input;
+#define NUM_GPIO_OUTPUT 8
+unsigned int gpio_output_offsets[] = { 17, 27, 22, 23, 24, 5, 16, 26 };
+#define NUM_GPIO_INPUT 1
+unsigned int gpio_input_offsets[] = { 6 };
+int gpio_output_values[] = { 1, 1, 0, 0, 0, 0, 1, 1 };
+int gpio_input_values[] = { 0 };
 
-#define GPIO_OE 0
-#define GPIO_SRCLR 1
-#define GPIO_SRCLK 2
-#define GPIO_RCLK 3
-#define GPIO_SER 4
+#define GPIO_OUTPUT_OE 0
+#define GPIO_OUTPUT_SRCLR 1
+#define GPIO_OUTPUT_SRCLK 2
+#define GPIO_OUTPUT_RCLK 3
+#define GPIO_OUTPUT_SER 4
+
+#define GPIO_INPUT_CLK 5
+#define GPIO_INPUT_CLR 6
+#define GPIO_INPUT_LD 7
+#define GPIO_INPUT_DATA 0
 
 void ReadDipSwitchIntoGlobal(void) {
   // TODO: Implement
-  num_hardware_positions = 4;
+  num_hardware_positions = 8;
 }
 
 vector<bool>* FetchPositionStates(vector<bool> *states) {
@@ -88,16 +98,7 @@ int ReadFromSerialPort(int fd, char* buffer, size_t size) {
   return read(fd, buffer, size);
 }
 
-int WriteToSerialPort(int fd, const char* buffer, size_t size) {
-  cout << "Write: ";
-  for (size_t i = 0; i < size; i++) {
-    cout << (int)buffer[i];
-  }
-  cout << endl;
-  return write(fd, buffer, size);
-}
-
-void closeSerialPort(int fd) {
+void CloseSerialPort(int fd) {
   close(fd);
 }
 
@@ -107,77 +108,129 @@ int OpenGPIOChip(const char *name) {
   return 0;
 }
 
-int GetGPIOLines() {
-  return gpiod_chip_get_lines(gpio_chip, gpio_offsets, 5, &gpio_lines);
+int GetGPIOOutputLines() {
+  return gpiod_chip_get_lines(gpio_chip, gpio_output_offsets, NUM_GPIO_OUTPUT, &gpio_lines_output);
 }
 
-int ConfigureGPIOChip() {
+int GetGPIOInputLines() {
+  return gpiod_chip_get_lines(gpio_chip, gpio_input_offsets, NUM_GPIO_INPUT, &gpio_lines_input);
+}
+
+int ConfigureGPIOChipOutput() {
   memset(&gpio_config, 0, sizeof(gpio_config));
   gpio_config.consumer = "simsafe_firmware";
   gpio_config.request_type = GPIOD_LINE_REQUEST_DIRECTION_OUTPUT;
   gpio_config.flags = 0;
 
-  return gpiod_line_request_bulk(&gpio_lines, &gpio_config, gpio_values);
+  return gpiod_line_request_bulk(&gpio_lines_output, &gpio_config, gpio_output_values);
+}
+
+int ConfigureGPIOChipInput() {
+  memset(&gpio_config, 0, sizeof(gpio_config));
+  gpio_config.consumer = "simsafe_firmware";
+  gpio_config.request_type = GPIOD_LINE_REQUEST_DIRECTION_INPUT;
+  gpio_config.flags = 0;
+
+  return gpiod_line_request_bulk(&gpio_lines_input, &gpio_config, gpio_input_values);
 }
 
 void ResetGPIO() {
-  gpio_values[GPIO_OE] = 1;
-  gpio_values[GPIO_SRCLR] = 1;
-  gpio_values[GPIO_SRCLK] = 0;
-  gpio_values[GPIO_RCLK] = 0;
-  gpio_values[GPIO_SER] = 0;
-  gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
+  gpio_output_values[GPIO_OUTPUT_OE] = 1;
+  gpio_output_values[GPIO_OUTPUT_SRCLR] = 1;
+  gpio_output_values[GPIO_OUTPUT_SRCLK] = 0;
+  gpio_output_values[GPIO_OUTPUT_RCLK] = 0;
+  gpio_output_values[GPIO_OUTPUT_SER] = 0;
+  gpio_output_values[GPIO_INPUT_CLR] = 0;
+  gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
 
-  gpio_values[GPIO_SRCLR] = 0;
-  gpio_values[GPIO_SRCLK] = 1;
-  gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
+  gpio_output_values[GPIO_OUTPUT_SRCLR] = 0;
+  gpio_output_values[GPIO_OUTPUT_SRCLK] = 1;
+  gpio_output_values[GPIO_INPUT_CLR] = 1;
+  gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
 
-  gpio_values[GPIO_SRCLR] = 1;
-  gpio_values[GPIO_SRCLK] = 0;
-  gpio_values[GPIO_RCLK] = 1;
-  gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
+  gpio_output_values[GPIO_OUTPUT_SRCLR] = 1;
+  gpio_output_values[GPIO_OUTPUT_SRCLK] = 0;
+  gpio_output_values[GPIO_OUTPUT_RCLK] = 1;
+  gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
 
-  gpio_values[GPIO_RCLK] = 0;
-  gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
+  gpio_output_values[GPIO_OUTPUT_RCLK] = 0;
+  gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
 }
 
 int OpenGPIOOutput() {
-  gpio_values[GPIO_OE] = 0;
-  return gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
+  gpio_output_values[GPIO_OUTPUT_OE] = 0;
+  return gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
 }
 
 int CloseGPIOOutput() {
-  gpio_values[GPIO_OE] = 1;
-  return gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
+  gpio_output_values[GPIO_OUTPUT_OE] = 1;
+  return gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
 }
 
 void CloseGPIOChipOnly() {
   gpiod_chip_close(gpio_chip);
 }
 
-void CloseGPIO() {
-  gpiod_line_release_bulk(&gpio_lines);
+void CloseGPIOOutputLines() {
+  gpiod_line_release_bulk(&gpio_lines_output);
   gpiod_chip_close(gpio_chip);
 }
 
-void SendWordToGPIO(vector<bool> *values) {
-  for (HARDWARE_POSITIONS_TYPE i = num_hardware_positions; i > 0; i--) {
-    if (values->at(i - 1)) {
-      gpio_values[GPIO_SER] = 1;
-      gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
-    } else {
-      gpio_values[GPIO_SER] = 0;
+void CloseGPIO() {
+  gpiod_line_release_bulk(&gpio_lines_output);
+  gpiod_line_release_bulk(&gpio_lines_input);
+  gpiod_chip_close(gpio_chip);
+}
+
+void SendWordToGPIO(const vector<bool> *values) {
+  try {
+    for (HARDWARE_POSITIONS_TYPE i = num_hardware_positions; i > 0; i--) {
+      if (values->at(i - 1)) {
+        gpio_output_values[GPIO_OUTPUT_SER] = 1;
+        gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+      } else {
+        gpio_output_values[GPIO_OUTPUT_SER] = 0;
+      }
+  
+      gpio_output_values[GPIO_OUTPUT_SRCLK] = 1;
+      gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+      gpio_output_values[GPIO_OUTPUT_SRCLK] = 0;
+      gpio_output_values[GPIO_OUTPUT_SER] = 0;
+      gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
     }
-
-    gpio_values[GPIO_SRCLK] = 1;
-    gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
-    gpio_values[GPIO_SRCLK] = 0;
-    gpio_values[GPIO_SER] = 0;
-    gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
+  
+    gpio_output_values[GPIO_OUTPUT_RCLK] = 1;
+    gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+    gpio_output_values[GPIO_OUTPUT_RCLK] = 0;
+    gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+  } catch (exception const *e) {
+    cout << "Exception while writing GPIO: " << e->what() << endl;
   }
+}
 
-  gpio_values[GPIO_RCLK] = 1;
-  gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
-  gpio_values[GPIO_RCLK] = 0;
-  gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
+void ReadGPIO(vector<bool> *output) {
+  try {
+    gpio_output_values[GPIO_INPUT_CLR] = 0;
+    gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+    gpio_output_values[GPIO_INPUT_CLR] = 1;
+    gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+    gpio_output_values[GPIO_INPUT_LD] = 0;
+    gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+    gpio_output_values[GPIO_INPUT_CLK] = 1;
+    gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+    gpio_output_values[GPIO_INPUT_LD] = 1;
+    gpio_output_values[GPIO_INPUT_CLK] = 0;
+    gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+    
+    for (HARDWARE_POSITIONS_TYPE i = num_hardware_positions; i > 0; i--) {
+      gpiod_line_get_value_bulk(&gpio_lines_input, gpio_input_values);
+      output->at(i - 1) = gpio_input_values[GPIO_INPUT_DATA];
+      gpio_output_values[GPIO_INPUT_CLK] = 1;
+      gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+      gpio_output_values[GPIO_INPUT_CLK] = 0;
+      gpiod_line_set_value_bulk(&gpio_lines_output, gpio_output_values);
+    }
+  } catch (exception const *e) {
+    cout << "Exception while reading GPIO: " << e->what() << endl;
+  }
 }
