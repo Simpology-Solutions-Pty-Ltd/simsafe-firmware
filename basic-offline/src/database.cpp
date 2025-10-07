@@ -108,7 +108,7 @@ bool DoesCabinetPositionMatchHardwarePositionCount(connection *conn) noexcept(tr
 
   try {
     work tx{*conn};
-    int count = tx.query_value<int>("select count(1) from cabinet c join position p on p.cabinetid = c.cabinetid where c.cabinetid = " + to_string(cabinetid));
+    HARDWARE_POSITIONS_TYPE count = tx.query_value<u_int32_t>("select count(1) from cabinet c join position p on p.cabinetid = c.cabinetid where c.cabinetid = " + to_string(cabinetid));
     if (count != num_hardware_positions) return false;
   } catch (exception const &e) {
     return false;

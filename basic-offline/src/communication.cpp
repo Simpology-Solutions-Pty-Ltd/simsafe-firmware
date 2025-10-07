@@ -9,7 +9,8 @@
 
 using namespace std;
 
-u_int16_t num_hardware_positions = 0;
+#define HARDWARE_POSITIONS_TYPE u_int16_t
+HARDWARE_POSITIONS_TYPE num_hardware_positions = 0;
 struct gpiod_chip *gpio_chip;
 struct gpiod_line_request_config gpio_config;
 struct gpiod_line_bulk gpio_lines;
@@ -30,11 +31,11 @@ void ReadDipSwitchIntoGlobal(void) {
 vector<bool>* FetchPositionStates(vector<bool> *states) {
   // TODO: Implement
   if (states->size() < num_hardware_positions) {
-    for (int i = 0, n = num_hardware_positions - states->size(); i < n; i++) {
+    for (HARDWARE_POSITIONS_TYPE i = 0, n = num_hardware_positions - states->size(); i < n; i++) {
       states->push_back(false);
     }
   }
-  for (int i = 0; i < num_hardware_positions; i++) {
+  for (HARDWARE_POSITIONS_TYPE i = 0; i < num_hardware_positions; i++) {
     states->at(i) = rand() > (INT32_MAX / 2);
   }
   return states;
@@ -160,8 +161,8 @@ void CloseGPIO() {
 }
 
 void SendWordToGPIO(vector<bool> *values) {
-  for (int i = num_hardware_positions - 1; i >= 0; i--) {
-    if (values->at(i)) {
+  for (HARDWARE_POSITIONS_TYPE i = num_hardware_positions; i > 0; i--) {
+    if (values->at(i - 1)) {
       gpio_values[GPIO_SER] = 1;
       gpiod_line_set_value_bulk(&gpio_lines, gpio_values);
     } else {

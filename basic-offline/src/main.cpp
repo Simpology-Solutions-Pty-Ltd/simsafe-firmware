@@ -33,6 +33,10 @@ void LoadEnv() noexcept(true) {
     cout << "DATABASE_HOST env variable required" << endl;
     exit(1);
   }
+  if (getenv("GPIO_CHIP_NAME") == NULL) {
+    cout << "GPIO_CHIP_NAME env variable required" << endl;
+    exit(1);
+  }
   if (getenv("CONTROLLER_SERIAL_NUMBER") == NULL) {
     cout << "CONTROLLER_SERIAL_NUMBER env variable required" << endl;
     exit(1);
@@ -61,7 +65,7 @@ void *PositionOpenedClosedEventsThreadTask(void *arg) {
     conn = FetchConnection();
     
     FetchPositionStates(next_states.get());
-    for (int i = 0; i < num_hardware_positions; i++) {
+    for (HARDWARE_POSITIONS_TYPE i = 0; i < num_hardware_positions; i++) {
       if (next_states->at(i) && !current_states->at(i)) {
         CreatePositionOpenedEvent(&conn->conn, i + 1);
       } else if (!next_states->at(i) && current_states->at(i)) {
@@ -96,7 +100,7 @@ void AuthCodeRead(const char *auth_code, int length) {
   conn->in_use = false;
 
   cout << "Access received: ";
-  for (int i = 0; i < num_hardware_positions; i++) {
+  for (HARDWARE_POSITIONS_TYPE i = 0; i < num_hardware_positions; i++) {
     if (output.at(i)) 
       cout << '1';
     else
@@ -108,6 +112,7 @@ void AuthCodeRead(const char *auth_code, int length) {
   OpenGPIOOutput();
   this_thread::sleep_for(chrono::milliseconds(200));
   CloseGPIOOutput();
+
 }
 
 void *ReadSerialThreadTask(void *arg) {
@@ -229,7 +234,9 @@ int main() {
 
   ReadCabinetIdIntoGlobal(&conn->conn);
 
-  if (OpenGPIOChip("/dev/gpiochip4")) {
+  cout << "Opening GPIO..." << endl;
+
+  if (OpenGPIOChip(getenv("GPIO_CHIP_NAME"))) {
     cout << "Could not open GPIO chip" << endl;
     // TODO: Decide what do to
     CloseConnectionPool();
@@ -255,6 +262,8 @@ int main() {
   ResetGPIO();
 
   ReadDipSwitchIntoGlobal();
+
+  cout << "GPIO opened!" << endl;
 
   cout << "Cabinetid: " << cabinetid << endl << "Num positions hardware: " << num_hardware_positions << endl;
 
